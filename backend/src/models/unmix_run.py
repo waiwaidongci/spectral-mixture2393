@@ -8,7 +8,8 @@ class UnmixRun(Base):
     name:Mapped[str]=mapped_column(String(120))
     library_id:Mapped[int]=mapped_column(ForeignKey("spectral_libraries.id"))
     sample_ids:Mapped[list]=mapped_column(JSON)
-    noise_sigma:Mapped[float]=mapped_column(Double)
+    noise_sigma:Mapped[float|None]=mapped_column(Double,nullable=True)
+    calibration_id:Mapped[int|None]=mapped_column(ForeignKey("blank_calibrations.id"),nullable=True,default=None)
     repeats:Mapped[int]
     seed:Mapped[int]
     input_snapshot:Mapped[dict]=mapped_column(JSON)

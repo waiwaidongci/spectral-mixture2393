@@ -1,10 +1,22 @@
 import json
 import numpy as np
 from src.config.database import Base,engine,SessionLocal
-from src.models import User,SpectralLibrary,Endmember,MixtureSample,UnmixRun,ReplicationNote
+from src.models import User,SpectralLibrary,Endmember,MixtureSample,UnmixRun,ReplicationNote,BlankCalibration
 from src.utils.security import hash_password
 from src.services.run_service import create_snapshot
 from src.services.analysis_service import analyze_unmix
+from src.services.calibration_service import create_calibration,frozen_calibration
+from src.schemas.calibration import CalibrationInput
+
+class _SeedUser:
+    def __init__(self,name,email):self.name,self.email=name,email
+
+def blank_readings(joint=False,repeats=40,seed=311):
+    """Synthetic blank repeats; the adjacent-band correlation is deliberate demo input."""
+    rng=np.random.default_rng(seed)
+    if not joint:return rng.normal(0,.005,size=(repeats,12)).tolist()
+    covariance=np.array([[.90**abs(i-j)*.005**2 for j in range(12)] for i in range(12)])
+    return (np.linalg.cholesky(covariance)@rng.normal(0,1,size=(12,repeats))).T.tolist()
 
 def seed():
     Base.metadata.create_all(engine)
@@ -29,9 +41,13 @@ def seed():
                 sc=f"{code}-{i:03}"
                 if not db.query(MixtureSample).filter_by(code=sc).first():db.add(MixtureSample(code=sc,library_id=library.id,name=f"矿物复配样本 {i:02}",observed=observed.tolist(),note="合成混合谱；真实配比未提供给算法。残差可能包含模型失配，不能只解释为测量噪声。"))
             db.flush();libraries.append(library)
+        if not db.query(BlankCalibration).filter_by(library_id=libraries[0].id,name="校准库 · 空白测谱批次-01").first():
+            create_calibration(db,CalibrationInput(name="校准库 · 空白测谱批次-01",library_id=libraries[0].id,source="空池重复测谱（合成演示，相邻波段相关）",readings=blank_readings()),_SeedUser("苏砚 · 光谱研究员","analyst@lengsha.demo"))
         if not db.query(UnmixRun).filter_by(name="校准库 · 首批三样本解混").first():
-            library=libraries[0];ids=[s.id for s in db.query(MixtureSample).filter_by(library_id=library.id).order_by(MixtureSample.code).limit(3)];snapshot=create_snapshot(db,library,ids);result=analyze_unmix(snapshot,.005,80,2026)
+            library=libraries[0];ids=[s.id for s in db.query(MixtureSample).filter_by(library_id=library.id).order_by(MixtureSample.code).limit(3)]
+            # The archived first study stays on the legacy independent-noise calibration on purpose.
+            snapshot=create_snapshot(db,library,ids);result=analyze_unmix(snapshot,.005,80,2026)
             run=UnmixRun(name="校准库 · 首批三样本解混",library_id=library.id,sample_ids=ids,noise_sigma=.005,repeats=80,seed=2026,input_snapshot=snapshot,status="completed",result=result,owner="苏砚 · 光谱研究员");db.add(run);db.flush()
             db.add(ReplicationNote(run_id=run.id,title="首批复配观察记录",interpretation="配比符合非负与和为1约束；分位范围条件于固定端元与给定sigma，不保证真配比覆盖。",proposal="按点估计做小样复配并重新测谱，另行评估端元校准误差和模型失配。",status="approved",owner="苏砚 · 光谱研究员",reviewer="贺青 · 材料负责人",review_note="批准研究归档；复配比例仍须独立实验验证，不把条件扰动范围当作成分真值保证。"))
-        db.commit();print(json.dumps({m.__tablename__:db.query(m).count() for m in [User,SpectralLibrary,Endmember,MixtureSample,UnmixRun,ReplicationNote]},ensure_ascii=False))
+        db.commit();print(json.dumps({m.__tablename__:db.query(m).count() for m in [User,SpectralLibrary,Endmember,MixtureSample,UnmixRun,ReplicationNote,BlankCalibration]},ensure_ascii=False))
 if __name__=="__main__":seed()
